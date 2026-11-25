@@ -186,17 +186,10 @@ def run_check(
     state["last_session_alert_at"] = None
     state["last_scraper_alert_at"] = None
 
-    logger.info(
-        "Fetched %d active assessment(s) due within %.0f hours.",
-        len(assessments),
-        settings.deadline_window_hours,
-    )
+    logger.info("Fetched %d active assessment(s).", len(assessments))
 
     if dry_run:
-        print(
-            f"\n[DRY RUN] Active assessments due within {settings.deadline_window_hours:g}h "
-            f"({len(assessments)} found):"
-        )
+        print(f"\n[DRY RUN] Active assessments ({len(assessments)} found):")
         for item in assessments:
             rem = format_remaining(item.due_at - now)
             print(

@@ -62,7 +62,7 @@ def make_raw_item(
 
 
 class ScraperFilteringTests(unittest.TestCase):
-    def test_filters_only_active_within_48_hours(self) -> None:
+    def test_filters_active_unsubmitted_and_optional_window(self) -> None:
         settings = make_settings()
         now = datetime(2026, 11, 25, 12, 0, tzinfo=IST)
 
@@ -71,8 +71,8 @@ class ScraperFilteringTests(unittest.TestCase):
             "data": [
                 # 1. Active, due in ~36h -> INCLUDED
                 make_raw_item("keep-1", "Quiz Due Soon", due_utc="2026-11-26T18:29:00.000Z"),
-                # 2. Active, due in > 48h -> EXCLUDED
-                make_raw_item("skip-far", "Too Far", due_utc="2026-11-29T18:29:00.000Z"),
+                # 2. Active, due in ~7 days -> INCLUDED when window_hours=None
+                make_raw_item("keep-7d", "Assignment 1", due_utc="2026-12-02T18:29:00.000Z"),
                 # 3. Past due -> EXCLUDED
                 make_raw_item("skip-past", "Past Due", due_utc="2026-11-25T05:00:00.000Z"),
                 # 4. UPCOMING status even if close -> EXCLUDED
@@ -89,7 +89,7 @@ class ScraperFilteringTests(unittest.TestCase):
                     computed_status="SUBMITTED",
                     due_utc="2026-11-26T12:00:00.000Z",
                 ),
-                # 6. Extension moves deadline inside 48h -> INCLUDED with extensionDueDate
+                # 6. Extension moves deadline into future -> INCLUDED with extensionDueDate
                 make_raw_item(
                     "keep-ext",
                     "Extended Report",
@@ -101,13 +101,16 @@ class ScraperFilteringTests(unittest.TestCase):
             ],
         }
 
-        results = parse_assessments_payload(payload, settings, now=now)
-        self.assertEqual([a.id for a in results], ["keep-ext", "keep-1"])
+        all_active = parse_assessments_payload(payload, settings, now=now)
+        self.assertEqual([a.id for a in all_active], ["keep-ext", "keep-1", "keep-7d"])
         self.assertEqual(
-            results[1].url,
+            all_active[1].url,
             "https://www.sidus.net/modules/assessments/assessments/keep-1/quiz",
         )
-        self.assertTrue(results[0].is_extension)
+        self.assertTrue(all_active[0].is_extension)
+
+        within_48h = parse_assessments_payload(payload, settings, now=now, window_hours=48.0)
+        self.assertEqual([a.id for a in within_48h], ["keep-ext", "keep-1"])
 
 
 class StateAndReminderTests(unittest.TestCase):
@@ -194,6 +197,32 @@ class StateAndReminderTests(unittest.TestCase):
         with patch("notifier.requests.get", return_value=fake_resp):
             newest = process_telegram_commands(settings, [], 42, now)
         self.assertEqual(newest, 42)
+
+    def test_seven_day_active_alerts_immediately_without_early_reminders(self) -> None:
+        settings = make_settings()
+        state = default_state()
+        t0 = datetime(2026, 11, 25, 12, 0, tzinfo=IST)
+        due_7d = t0 + timedelta(days=7)
+
+        payload = {
+            "success": True,
+            "data": [
+                make_raw_item(
+                    "a7",
+                    "Assignment 1",
+                    due_utc=due_7d.astimezone(ZoneInfo("UTC")).isoformat(),
+                )
+            ],
+        }
+        items = parse_assessments_payload(payload, settings, now=t0)
+        alerts = evaluate_assessments(items, state, settings, t0)
+        self.assertEqual([k for k, _ in alerts], ["new"])
+        self.assertEqual(state["assessments"]["a7"]["sent_reminders"], [])
+
+        # Two days later (5 days left) -> still no reminder yet
+        t_5d = t0 + timedelta(days=2)
+        alerts = evaluate_assessments(items, state, settings, t_5d)
+        self.assertEqual(alerts, [])
 
 
 if __name__ == "__main__":

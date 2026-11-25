@@ -181,9 +181,13 @@ def process_telegram_commands(
             )
             send_message(settings, reply)
         elif text == "/upcoming":
+            window_delta = timedelta(hours=settings.deadline_window_hours)
+            upcoming = [
+                a for a in assessments if timedelta(0) < (a.due_at - now) < window_delta
+            ]
             reply = format_assessment_list(
                 f"📋 Upcoming Active Assessments (< {int(settings.deadline_window_hours)}h)",
-                assessments,
+                upcoming,
                 now,
                 "No active assessments due soon.",
             )

@@ -156,8 +156,7 @@ def parse_assessments_payload(
         raise ScraperError("Unexpected API response: 'data' is not a list")
 
     current_time = now.astimezone(settings.timezone) if now else datetime.now(settings.timezone)
-    max_hours = settings.deadline_window_hours if window_hours is None else window_hours
-    max_delta = timedelta(hours=max_hours)
+    max_delta = timedelta(hours=window_hours) if window_hours is not None else None
 
     results: list[Assessment] = []
     for item in items:
@@ -186,8 +185,10 @@ def parse_assessments_payload(
             continue
 
         remaining = due_at - current_time
-        # Ignore past-due assessments and those outside the configured < 2 days window
-        if remaining <= timedelta(0) or remaining >= max_delta:
+        # Ignore past-due assessments and optionally enforce an upper deadline window
+        if remaining <= timedelta(0):
+            continue
+        if max_delta is not None and remaining >= max_delta:
             continue
 
         subject = item.get("subject") or {}
@@ -228,8 +229,9 @@ def fetch_assessments(
     settings: Settings,
     session_path: Path = SESSION_FILE,
     now: datetime | None = None,
+    window_hours: float | None = None,
 ) -> list[Assessment]:
-    """Fetch active assessments due within the configured window from Sidus API."""
+    """Fetch active, unsubmitted, non-past-due assessments from Sidus API."""
     cookies = _load_cookies_from_session(session_path)
     http = _build_http_session(cookies, settings.portal_origin)
     url = f"{settings.api_base_url}{ASSESSMENTS_ENDPOINT}"
@@ -252,5 +254,5 @@ def fetch_assessments(
     except ValueError as exc:
         raise ScraperError("Sidus API returned non-JSON response (portal may have changed)") from exc
 
-    return parse_assessments_payload(payload, settings, now=now)
+    return parse_assessments_payload(payload, settings, now=now, window_hours=window_hours)
 

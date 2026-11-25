@@ -1,12 +1,12 @@
 # Sidus Portal Deadline Notifier (Aurora University)
 
-A 100% free Python notification system that checks the **Sidus Portal** (`https://www.sidus.net`) every 30 minutes and sends instant Telegram alerts to your phone for **active assessments due within 2 days (< 48 hours)**.
+A 100% free Python notification system that checks the **Sidus Portal** (`https://www.sidus.net`) every 30 minutes and sends instant Telegram alerts to your phone for **all active assessments** (new posts, deadline changes, and `24h / 6h / 3h / 2h / 1h` reminders).
 
 ## Features
-- **New Assessment Alerts**: Instant notification when an active assessment enters your 48-hour deadline window.
+- **New Assessment Alerts**: Instant notification whenever a new `ACTIVE` assessment is posted (regardless of whether the deadline is 2 days or 7+ days away).
 - **Deadline Change Alerts**: Notifies you if an existing due date (or extension due date) changes.
 - **Configurable Reminders**: Alerts at `24h`, `6h`, `3h`, `2h`, and `1h` before the deadline (`REMINDER_HOURS=24,6,3,2,1`) without duplicating reminders.
-- **Smart Filtering**: Only tracks `ACTIVE` assessments due within `< 48` hours (`DEADLINE_WINDOW_HOURS=48`); ignores `UPCOMING`, `SUBMITTED`, `PUBLISHED`, missed, and past-due items.
+- **Smart Filtering**: Tracks all `ACTIVE` unsubmitted assessments (ignoring `UPCOMING`, `SUBMITTED`, `PUBLISHED`, missed, and past-due items), while `/upcoming` shows urgent items due within `< 48` hours (`DEADLINE_WINDOW_HOURS=48`).
 - **Session-Reuse Login**: Uses `login_once.py` (Playwright) to save session cookies locally into `session.json`—no password is stored in code or `.env`.
 - **Failure Alerts**: Sends `"Session expired, run login_once.py"` if your ~7-day JWT cookie expires, or alerts you if the portal API/layout changes.
 - **Telegram Commands**: Supports `/today` and `/upcoming` (checked automatically on each run).
