@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -134,7 +135,10 @@ def process_telegram_commands(
 ) -> int:
     """Check recent Telegram messages for /today or /upcoming and reply if found."""
     url = f"{TELEGRAM_API_BASE}/bot{settings.telegram_bot_token}/getUpdates"
-    params: dict[str, Any] = {"timeout": 0, "allowed_updates": ["message"]}
+    params: dict[str, Any] = {
+        "timeout": 0,
+        "allowed_updates": json.dumps(["message"]),
+    }
     if last_update_id > 0:
         params["offset"] = last_update_id + 1
 
@@ -180,6 +184,16 @@ def process_telegram_commands(
                 "No active assessments due soon.",
             )
             send_message(settings, reply)
+
+    if newest_id > last_update_id:
+        try:
+            requests.get(
+                url,
+                params={"timeout": 0, "offset": newest_id + 1},
+                timeout=10,
+            )
+        except requests.RequestException:
+            pass
 
     return newest_id
 
