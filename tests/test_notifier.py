@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -12,7 +13,14 @@ from zoneinfo import ZoneInfo
 
 from config import Settings
 from main import evaluate_assessments, run_check
-from notifier import format_assessment_message, process_telegram_commands
+from notifier import (
+    WhatsAppError,
+    format_assessment_message,
+    html_to_whatsapp_text,
+    notify_all,
+    process_telegram_commands,
+    send_whatsapp_message,
+)
 from scraper import SessionExpiredError, parse_assessments_payload
 from state import default_state, load_state, save_state
 
@@ -223,6 +231,41 @@ class StateAndReminderTests(unittest.TestCase):
         t_5d = t0 + timedelta(days=2)
         alerts = evaluate_assessments(items, state, settings, t_5d)
         self.assertEqual(alerts, [])
+
+    def test_whatsapp_formatting_and_fallback_isolation(self) -> None:
+        raw_html = (
+            '<b>🆕 New Assessment</b>\n'
+            '<b>Title:</b> C++ &amp; Pointers\n'
+            '<i>Submissions open later</i>\n'
+            '<a href="https://www.sidus.net/quiz">Open Assessment</a>'
+        )
+        wa_text = html_to_whatsapp_text(raw_html)
+        self.assertIn("*🆕 New Assessment*", wa_text)
+        self.assertIn("C++ & Pointers", wa_text)
+        self.assertIn("_Submissions open later_", wa_text)
+        self.assertIn("Open Assessment: https://www.sidus.net/quiz", wa_text)
+
+        settings = replace(
+            make_settings(),
+            whatsapp_phone="+919999999999",
+            callmebot_api_key="SECRET_CB_KEY",
+        )
+        with (
+            patch("notifier.send_message") as mock_tg,
+            patch("notifier.send_whatsapp_message", side_effect=WhatsAppError("down")),
+        ):
+            notify_all(settings, "<b>Hello</b>")
+            mock_tg.assert_called_once()
+
+        import requests as req_lib
+
+        with patch(
+            "notifier.requests.get",
+            side_effect=req_lib.RequestException("failed key=SECRET_CB_KEY"),
+        ):
+            with self.assertRaises(WhatsAppError) as ctx:
+                send_whatsapp_message(settings, "test")
+            self.assertNotIn("SECRET_CB_KEY", str(ctx.exception))
 
 
 if __name__ == "__main__":

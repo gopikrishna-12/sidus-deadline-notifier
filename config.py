@@ -36,6 +36,8 @@ class Settings:
     reminder_hours: tuple[int, ...]
     timezone_name: str
     timezone: ZoneInfo
+    whatsapp_phone: str = ""
+    callmebot_api_key: str = ""
 
 
 def _parse_reminder_hours(raw: str) -> tuple[int, ...]:
@@ -70,9 +72,14 @@ def load_settings(require_telegram: bool = True) -> Settings:
 
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if require_telegram and (not token or not chat_id):
+    whatsapp_phone = os.getenv("WHATSAPP_PHONE", "").strip()
+    callmebot_api_key = os.getenv("CALLMEBOT_API_KEY", "").strip()
+
+    has_telegram = bool(token and chat_id)
+    has_whatsapp = bool(whatsapp_phone and callmebot_api_key)
+    if require_telegram and not has_telegram and not has_whatsapp:
         raise ValueError(
-            "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env"
+            "Configure TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (and/or WHATSAPP_PHONE + CALLMEBOT_API_KEY) in .env"
         )
 
     portal_url = os.getenv("PORTAL_URL", DEFAULT_PORTAL_URL).strip() or DEFAULT_PORTAL_URL
@@ -101,6 +108,8 @@ def load_settings(require_telegram: bool = True) -> Settings:
         reminder_hours=reminder_hours,
         timezone_name=tz_name,
         timezone=tz,
+        whatsapp_phone=whatsapp_phone,
+        callmebot_api_key=callmebot_api_key,
     )
 
 

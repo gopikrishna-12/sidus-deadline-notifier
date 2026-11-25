@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import json
+import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -13,6 +15,7 @@ from config import Settings
 from scraper import Assessment
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
+CALLMEBOT_API_URL = "https://api.callmebot.com/whatsapp.php"
 
 METHOD_LABELS = {
     "QUIZ": "Quiz",
@@ -24,6 +27,10 @@ METHOD_LABELS = {
 
 class TelegramError(RuntimeError):
     """Raised when sending or polling Telegram messages fails."""
+
+
+class WhatsAppError(RuntimeError):
+    """Raised when sending a WhatsApp message via CallMeBot fails."""
 
 
 def format_remaining(delta: timedelta) -> str:
@@ -76,8 +83,22 @@ def format_assessment_message(
 
 
 def _redact_token(text: str, token: str) -> str:
-    """Ensure bot token never leaks into raised exceptions or logs."""
+    """Ensure API secrets never leak into raised exceptions or logs."""
     return text.replace(token, "[REDACTED]") if token else text
+
+
+def html_to_whatsapp_text(html_text: str) -> str:
+    """Convert Telegram HTML formatting into WhatsApp-friendly plain/markdown text."""
+    text = re.sub(
+        r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>',
+        r"\2: \1",
+        html_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(r"</?b>", "*", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?i>", "_", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text).strip()
 
 
 def send_message(settings: Settings, text: str, disable_preview: bool = True) -> None:
@@ -101,9 +122,53 @@ def send_message(settings: Settings, text: str, disable_preview: bool = True) ->
         )
 
 
+def send_whatsapp_message(settings: Settings, text: str) -> None:
+    """Send a WhatsApp message via CallMeBot if WHATSAPP_PHONE and CALLMEBOT_API_KEY are set."""
+    if not settings.whatsapp_phone or not settings.callmebot_api_key:
+        return
+    params = {
+        "phone": settings.whatsapp_phone,
+        "text": text,
+        "apikey": settings.callmebot_api_key,
+    }
+    try:
+        response = requests.get(CALLMEBOT_API_URL, params=params, timeout=20)
+    except requests.RequestException as exc:
+        safe_msg = _redact_token(str(exc), settings.callmebot_api_key)
+        raise WhatsAppError(f"CallMeBot request failed: {safe_msg}") from None
+
+    if response.status_code != 200:
+        safe_body = _redact_token(response.text[:300], settings.callmebot_api_key)
+        raise WhatsAppError(f"CallMeBot HTTP {response.status_code}: {safe_body}")
+
+
+def notify_all(
+    settings: Settings,
+    html_text: str,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Send an alert to Telegram (primary) and optionally mirror it to WhatsApp."""
+    has_telegram = bool(settings.telegram_bot_token and settings.telegram_chat_id)
+    has_whatsapp = bool(settings.whatsapp_phone and settings.callmebot_api_key)
+
+    if has_telegram:
+        send_message(settings, html_text)
+
+    if has_whatsapp:
+        wa_text = html_to_whatsapp_text(html_text)
+        try:
+            send_whatsapp_message(settings, wa_text)
+        except WhatsAppError as exc:
+            if has_telegram:
+                if logger:
+                    logger.warning("WhatsApp delivery failed (Telegram succeeded): %s", exc)
+            else:
+                raise
+
+
 def send_plain_alert(settings: Settings, text: str) -> None:
-    """Send a plain text system/error alert wrapped safely in HTML."""
-    send_message(settings, html.escape(text))
+    """Send a plain text system/error alert to all configured channels."""
+    notify_all(settings, html.escape(text), logger=logging.getLogger("sidus_notifier"))
 
 
 def format_assessment_list(

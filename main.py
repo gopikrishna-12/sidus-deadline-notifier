@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,11 +13,12 @@ from typing import Any
 from config import SESSION_FILE, STATE_FILE, Settings, load_settings, setup_logging
 from notifier import (
     TelegramError,
+    WhatsAppError,
     format_assessment_message,
     format_due_ist,
     format_remaining,
+    notify_all,
     process_telegram_commands,
-    send_message,
     send_plain_alert,
 )
 from scraper import Assessment, ScraperError, SessionExpiredError, fetch_assessments
@@ -140,8 +142,8 @@ def run_test_notification(settings: Settings, logger: logging.Logger) -> int:
         url=settings.portal_url,
     )
     msg = format_assessment_message("🧪 Test Alert", sample, now)
-    send_message(settings, msg)
-    logger.info("Sent test Telegram notification successfully.")
+    notify_all(settings, msg, logger=logger)
+    logger.info("Sent test notification successfully.")
     return 0
 
 
@@ -204,24 +206,29 @@ def run_check(
         return 0
 
     alerts = evaluate_assessments(assessments, state, settings, now)
-    for kind, msg in alerts:
+    whatsapp_enabled = bool(settings.whatsapp_phone and settings.callmebot_api_key)
+    for idx, (kind, msg) in enumerate(alerts):
         try:
-            send_message(settings, msg)
+            notify_all(settings, msg, logger=logger)
             logger.info("Sent %s notification.", kind)
-        except TelegramError as exc:
+        except (TelegramError, WhatsAppError) as exc:
             logger.error("Failed to send %s notification: %s", kind, exc)
             return 1
+        if whatsapp_enabled and idx + 1 < len(alerts):
+            # Space consecutive CallMeBot requests slightly to reduce rate-limit drops
+            time.sleep(2)
 
-    try:
-        newest_update_id = process_telegram_commands(
-            settings,
-            assessments,
-            int(state.get("last_update_id") or 0),
-            now,
-        )
-        state["last_update_id"] = newest_update_id
-    except TelegramError as exc:
-        logger.warning("Could not process Telegram commands: %s", exc)
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        try:
+            newest_update_id = process_telegram_commands(
+                settings,
+                assessments,
+                int(state.get("last_update_id") or 0),
+                now,
+            )
+            state["last_update_id"] = newest_update_id
+        except TelegramError as exc:
+            logger.warning("Could not process Telegram commands: %s", exc)
 
     save_state(state, state_path)
     logger.info("Check complete. %d alert(s) sent.", len(alerts))
@@ -260,13 +267,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 1
 
-    secrets = [settings.telegram_bot_token] if settings.telegram_bot_token else []
+    secrets = [
+        s
+        for s in (settings.telegram_bot_token, settings.callmebot_api_key)
+        if s
+    ]
     logger = setup_logging(secrets=secrets, verbose=args.verbose)
 
     if args.test:
         try:
             return run_test_notification(settings, logger)
-        except TelegramError as exc:
+        except (TelegramError, WhatsAppError) as exc:
             logger.error("Test notification failed: %s", exc)
             return 1
 

@@ -177,6 +177,18 @@ GitHub Actions only runs every ~30 minutes. To get **instant (< 1 second) 24/7 r
 
 ---
 
+### Optional: Also Send Alerts to WhatsApp (CallMeBot)
+
+You can mirror all deadline notifications to **WhatsApp** for free alongside Telegram:
+1. Check CallMeBot's official setup page (`https://www.callmebot.com/blog/free-api-whatsapp-messages/`) for their current WhatsApp number.
+2. Save that number in your phone contacts and send `I allow callmebot to send me messages` to it on WhatsApp.
+3. CallMeBot replies with your personal `apikey`.
+4. Add `WHATSAPP_PHONE` (with country code, e.g. `+919876543210`) and `CALLMEBOT_API_KEY` to `.env` (for local runs) and to **GitHub Secrets** (for cloud runs).
+
+*(Note: CallMeBot is an unofficial one-way gateway — it mirrors outgoing alerts to WhatsApp, while `/today` and `/upcoming` remain Telegram commands. If CallMeBot has downtime, Telegram delivery still succeeds.)*
+
+---
+
 ## Project Structure
 - `login_once.py` — One-time visible browser login to generate `session.json`
 - `scraper.py` — Authenticated JSON API fetcher (`GET /api/v1/student-portal/me/assessments`) and deadline filter

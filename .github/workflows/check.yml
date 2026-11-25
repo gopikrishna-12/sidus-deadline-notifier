@@ -48,6 +48,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
+          CALLMEBOT_API_KEY: ${{ secrets.CALLMEBOT_API_KEY }}
           PORTAL_URL: ${{ secrets.PORTAL_URL }}
           DEADLINE_WINDOW_HOURS: "48"
           REMINDER_HOURS: "24,6,3,2,1"
