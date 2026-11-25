@@ -187,7 +187,7 @@ function formatAssessmentList(heading, assessments, emptyMessage) {
   const lines = [`<b>${escapeHtml(heading)}</b> (${assessments.length})`];
   assessments.forEach((item, index) => {
     lines.push(
-      `\n${index + 1}. <b>${escapeHtml(item.title)}</b> — ${escapeHtml(item.course)}\n` +
+      `\n${index + 1}. <b>${escapeHtml(item.title)}</b> \u2014 ${escapeHtml(item.course)}\n` +
         `   Due: ${escapeHtml(formatIstDateTime(item.dueDate))} (${escapeHtml(formatRemaining(item.remainingMs))} left)\n` +
         `   <a href="${escapeHtml(item.url)}">Open</a>`
     );
@@ -253,7 +253,7 @@ export default {
       await sendTelegramMessage(
         env,
         chatId,
-        "<b>Sidus Deadline Bot</b>\nCommands:\n/today — Active assessments due today\n/upcoming — Active assessments due within 48 hours"
+        "<b>Sidus Deadline Bot</b>\nCommands:\n/today \u2014 Active assessments due today\n/upcoming \u2014 Active assessments due within 48 hours"
       );
       return new Response("OK", { status: 200 });
     }
@@ -270,14 +270,14 @@ export default {
         await sendTelegramMessage(
           env,
           chatId,
-          formatAssessmentList("📅 Due Today", dueToday, "No active assessments due today.")
+          formatAssessmentList("\u{1F4C5} Due Today", dueToday, "No active assessments due today.")
         );
       } else {
         await sendTelegramMessage(
           env,
           chatId,
           formatAssessmentList(
-            `📋 Upcoming Active Assessments (< ${windowHours}h)`,
+            `\u{1F4CB} Upcoming Active Assessments (< ${windowHours}h)`,
             assessments,
             "No active assessments due soon."
           )
@@ -295,7 +295,7 @@ export default {
         await sendTelegramMessage(
           env,
           chatId,
-          escapeHtml(`⚠️ Could not fetch Sidus assessments (${code}).`)
+          escapeHtml(`\u26A0\uFE0F Could not fetch Sidus assessments (${code}).`)
         );
       }
     }
