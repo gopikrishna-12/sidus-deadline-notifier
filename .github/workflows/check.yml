@@ -1,0 +1,67 @@
+name: Sidus Deadline Check
+
+# WARNING: Running in GitHub Actions has two limitations compared to local Task Scheduler:
+# 1. The university portal may block or rate-limit GitHub's cloud IP addresses.
+# 2. Sidus session tokens expire roughly every 7 days; you must re-run login_once.py
+#    locally and update the SESSION_JSON GitHub Secret whenever that happens.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check-deadlines:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: pip install requests python-dotenv tzdata
+
+      - name: Restore state.json cache
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: sidus-state-${{ github.run_id }}
+          restore-keys: |
+            sidus-state-
+
+      - name: Materialize session.json from secret
+        env:
+          SESSION_JSON: ${{ secrets.SESSION_JSON }}
+        run: |
+          if [ -z "$SESSION_JSON" ]; then
+            echo "SESSION_JSON secret is not set." >&2
+            exit 1
+          fi
+          printf '%s' "$SESSION_JSON" > session.json
+
+      - name: Run deadline checker
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+          DEADLINE_WINDOW_HOURS: "48"
+          REMINDER_HOURS: "24,6,3,2,1"
+          TIMEZONE: "Asia/Kolkata"
+        run: python main.py
+
+      - name: Clean up session.json
+        if: always()
+        run: rm -f session.json
+
+      - name: Save state.json cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: sidus-state-${{ github.run_id }}
+
