@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 from config import Settings
 from main import evaluate_assessments, run_check
-from notifier import format_assessment_message
+from notifier import format_assessment_message, process_telegram_commands
 from scraper import SessionExpiredError, parse_assessments_payload
 from state import default_state, load_state, save_state
 
@@ -186,6 +186,14 @@ class StateAndReminderTests(unittest.TestCase):
             self.assertEqual(sent, ["Session expired, run login_once.py"])
             saved = load_state(state_path)
             self.assertIsNotNone(saved["last_session_alert_at"])
+
+    def test_webhook_409_skips_getupdates_cleanly(self) -> None:
+        settings = make_settings()
+        now = datetime(2026, 11, 25, 12, 0, tzinfo=IST)
+        fake_resp = Mock(status_code=409)
+        with patch("notifier.requests.get", return_value=fake_resp):
+            newest = process_telegram_commands(settings, [], 42, now)
+        self.assertEqual(newest, 42)
 
 
 if __name__ == "__main__":

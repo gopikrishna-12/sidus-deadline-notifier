@@ -148,6 +148,10 @@ def process_telegram_commands(
         safe_msg = _redact_token(str(exc), settings.telegram_bot_token)
         raise TelegramError(f"Telegram getUpdates failed: {safe_msg}") from None
 
+    if response.status_code == 409:
+        # Telegram returns 409 Conflict when a webhook (e.g. Cloudflare Worker) is active
+        return last_update_id
+
     if response.status_code != 200:
         raise TelegramError(f"Telegram getUpdates HTTP {response.status_code}")
 

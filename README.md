@@ -155,6 +155,28 @@ To configure Option B in **GitHub → Settings → Secrets and variables → Act
 
 ---
 
+### Option C (24/7 Instant `/today` & `/upcoming`): Cloudflare Worker Webhook
+
+GitHub Actions only runs every ~30 minutes. To get **instant (< 1 second) 24/7 replies** to `/today` and `/upcoming` with **$0 and no credit card**:
+
+1. Create a free account at `https://dash.cloudflare.com`.
+2. Go to **Workers & Pages → Create → Create Worker → Deploy** (or deploy `cloudflare-worker/` with Wrangler).
+3. Click **Edit code**, paste the entire contents of `cloudflare-worker/worker.js`, and click **Deploy**.
+4. Open your Worker's **Settings → Variables and Secrets** and add 4 **Secrets**:
+   - `TELEGRAM_BOT_TOKEN`: your bot token
+   - `TELEGRAM_CHAT_ID`: your chat ID (`7386674154`)
+   - `SESSION_JSON`: full raw contents of `session.json` (remember to update it alongside GitHub Secrets whenever your ~7-day session expires)
+   - `WEBHOOK_SECRET`: any random password/string you invent (letters/numbers/underscores, no spaces)
+5. Register the webhook by opening this URL once in your browser (replace the 3 placeholders):
+   ```
+   https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER>.workers.dev&secret_token=<WEBHOOK_SECRET>
+   ```
+   You should see `{"ok":true,"result":true,"description":"Webhook was set"}`.
+
+*(GitHub Actions will keep sending your 30-minute new-assessment, deadline-change, and reminder alerts, and `notifier.py` automatically skips `getUpdates` when a webhook is active.)*
+
+---
+
 ## Project Structure
 - `login_once.py` — One-time visible browser login to generate `session.json`
 - `scraper.py` — Authenticated JSON API fetcher (`GET /api/v1/student-portal/me/assessments`) and deadline filter
@@ -164,5 +186,6 @@ To configure Option B in **GitHub → Settings → Secrets and variables → Act
 - `config.py` — `.env` loader and token-redacting logger (`app.log`)
 - `run.bat` / `SidusDeadlineNotifier.xml` — Windows Task Scheduler runner and task definition
 - `.github/workflows/check.yml` — Optional GitHub Actions cron workflow
+- `cloudflare-worker/worker.js` — Optional 24/7 instant Telegram webhook for `/today` & `/upcoming`
 - `tests/test_notifier.py` — Unit tests for filtering, reminder deduplication, deadline changes, and session expiry alerts
 

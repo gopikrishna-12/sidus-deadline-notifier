@@ -1,0 +1,8 @@
+name = "sidus-telegram-webhook"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+DEADLINE_WINDOW_HOURS = "48"
+PORTAL_ORIGIN = "https://www.sidus.net"
+API_BASE_URL = "https://server.sidus.net"
