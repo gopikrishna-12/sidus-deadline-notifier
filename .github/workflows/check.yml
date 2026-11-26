@@ -6,8 +6,10 @@ name: Sidus Deadline Check
 #    locally and update the SESSION_JSON GitHub Secret whenever that happens.
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
+  # Scheduled checks now run every 5 minutes via Cloudflare Worker Cron + KV (cloudflare-worker/worker.js).
+  # Uncomment below only if you stop using Cloudflare Worker Cron.
+  # schedule:
+  #   - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
