@@ -17,7 +17,7 @@
  *   - API_BASE_URL          (default: "https://server.sidus.net")
  *
  * Cron Trigger (Workers -> Settings -> Trigger Events -> Cron Triggers):
- *   - */5 * * * *           (every 5 minutes)
+ *   - Cron every 5 minutes (star/5 * * * *)
  */
 
 const ASSESSMENTS_ENDPOINT = "/api/v1/student-portal/me/assessments";
