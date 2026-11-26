@@ -267,6 +267,108 @@ class StateAndReminderTests(unittest.TestCase):
                 send_whatsapp_message(settings, "test")
             self.assertNotIn("SECRET_CB_KEY", str(ctx.exception))
 
+    def test_deadline_moved_earlier_and_opens_shifted_beforehand(self) -> None:
+        settings = make_settings()
+        t0 = datetime(2026, 11, 26, 14, 0, tzinfo=IST)
+        due_orig = datetime(2026, 11, 29, 23, 59, tzinfo=IST)
+        opens_orig = datetime(2026, 11, 28, 17, 0, tzinfo=IST)
+
+        state = {
+            "assessments": {
+                "q1": {
+                    "title": "Lab Quiz 1",
+                    "course": "CS209",
+                    "due_at": due_orig.isoformat(),
+                    "opens_at": opens_orig.isoformat(),
+                    "submissions_not_open_yet": True,
+                    "url": "https://www.sidus.net/modules/assessments/assessments/q1/quiz",
+                    "sent_reminders": [],
+                }
+            }
+        }
+
+        # Case 1: Faculty shifts opens_at earlier without changing due_at
+        t1 = datetime(2026, 11, 26, 14, 50, tzinfo=IST)
+        opens_earlier = datetime(2026, 11, 26, 15, 0, tzinfo=IST)
+        item_shifted = parse_assessments_payload(
+            {
+                "success": True,
+                "data": [
+                    {
+                        **make_raw_item(
+                            "q1",
+                            "Lab Quiz 1",
+                            due_utc=due_orig.astimezone(ZoneInfo("UTC")).isoformat(),
+                        ),
+                        "opensAt": opens_earlier.astimezone(ZoneInfo("UTC")).isoformat(),
+                        "submissionsNotOpenYet": False,
+                    }
+                ],
+            },
+            settings,
+            now=t1,
+        )
+        alerts = evaluate_assessments(item_shifted, state, settings, t1)
+        self.assertEqual([k for k, _ in alerts], ["schedule_changed"])
+        self.assertIn("Schedule Moved EARLIER", alerts[0][1])
+
+        # Case 2: Faculty cuts deadline from Nov 29 to today 3:50 PM
+        due_short = datetime(2026, 11, 26, 15, 50, tzinfo=IST)
+        item_shortened = parse_assessments_payload(
+            {
+                "success": True,
+                "data": [
+                    {
+                        **make_raw_item(
+                            "q1",
+                            "Lab Quiz 1",
+                            due_utc=due_short.astimezone(ZoneInfo("UTC")).isoformat(),
+                        ),
+                        "opensAt": opens_earlier.astimezone(ZoneInfo("UTC")).isoformat(),
+                        "submissionsNotOpenYet": False,
+                    }
+                ],
+            },
+            settings,
+            now=t1,
+        )
+        alerts = evaluate_assessments(item_shortened, state, settings, t1)
+        self.assertEqual([k for k, _ in alerts], ["deadline_changed"])
+        self.assertIn("Deadline Moved EARLIER", alerts[0][1])
+
+    def test_legacy_state_without_opens_at_does_not_false_alert(self) -> None:
+        settings = make_settings()
+        t0 = datetime(2026, 11, 26, 12, 0, tzinfo=IST)
+        due = datetime(2026, 11, 29, 23, 59, tzinfo=IST)
+        state = {
+            "assessments": {
+                "legacy-1": {
+                    "title": "Assignment 3",
+                    "course": "RE102",
+                    "due_at": due.isoformat(),
+                    "url": "https://www.sidus.net/modules/assessments/assessments",
+                    "sent_reminders": [],
+                }
+            }
+        }
+        items = parse_assessments_payload(
+            {
+                "success": True,
+                "data": [
+                    make_raw_item(
+                        "legacy-1",
+                        "Assignment 3",
+                        due_utc=due.astimezone(ZoneInfo("UTC")).isoformat(),
+                    )
+                ],
+            },
+            settings,
+            now=t0,
+        )
+        alerts = evaluate_assessments(items, state, settings, t0)
+        self.assertEqual(alerts, [])
+        self.assertIn("opens_at", state["assessments"]["legacy-1"])
+
 
 if __name__ == "__main__":
     unittest.main()

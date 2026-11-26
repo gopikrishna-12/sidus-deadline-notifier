@@ -40,6 +40,28 @@ def _should_send_error_alert(last_sent_iso: str | None, now: datetime) -> bool:
     return (now - last_dt) >= ERROR_ALERT_COOLDOWN
 
 
+def _format_previous_iso(iso_value: str | None, tz: Any) -> str:
+    """Format a stored ISO timestamp for display, falling back cleanly."""
+    if not iso_value:
+        return "Unknown"
+    try:
+        dt = datetime.fromisoformat(str(iso_value))
+        return format_due_ist(dt.astimezone(tz))
+    except ValueError:
+        return str(iso_value)
+
+
+def _parse_iso_safe(iso_value: str | None, tz: Any) -> datetime | None:
+    """Parse an ISO timestamp string into the configured timezone or return None."""
+    if not iso_value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(iso_value))
+        return dt.astimezone(tz) if dt.tzinfo else dt.replace(tzinfo=tz)
+    except ValueError:
+        return None
+
+
 def evaluate_assessments(
     assessments: list[Assessment],
     state: dict[str, Any],
@@ -59,6 +81,7 @@ def evaluate_assessments(
             continue
 
         due_iso = item.due_at.isoformat()
+        opens_iso = item.opens_at.isoformat() if item.opens_at else None
         existing = stored_map.get(item.id)
 
         if not isinstance(existing, dict):
@@ -70,30 +93,62 @@ def evaluate_assessments(
                 "title": item.title,
                 "course": item.course,
                 "due_at": due_iso,
+                "opens_at": opens_iso,
+                "submissions_not_open_yet": item.submissions_not_open_yet,
                 "url": item.url,
                 "sent_reminders": covered,
             }
             continue
 
         prev_due_iso = existing.get("due_at")
+        prev_opens_iso = existing.get("opens_at")
+        has_prev_opens = "opens_at" in existing
+        prev_locked = existing.get("submissions_not_open_yet")
         sent_reminders: list[int] = list(existing.get("sent_reminders") or [])
 
-        if prev_due_iso != due_iso:
-            old_due_display = prev_due_iso or "Unknown"
-            try:
-                old_dt = datetime.fromisoformat(str(prev_due_iso))
-                old_due_display = format_due_ist(old_dt.astimezone(settings.timezone))
-            except ValueError:
-                pass
+        due_changed = prev_due_iso != due_iso
+        opens_changed = has_prev_opens and prev_opens_iso != opens_iso
+        unlocked_early = prev_locked is True and not item.submissions_not_open_yet
+
+        if due_changed:
+            old_dt = _parse_iso_safe(prev_due_iso, settings.timezone)
+            moved_earlier = old_dt is not None and item.due_at < old_dt
+            header = "⚠️ Deadline Moved EARLIER" if moved_earlier else "📅 Deadline Extended"
+            extra_parts = [
+                f"<b>Previous Due:</b> {_format_previous_iso(prev_due_iso, settings.timezone)}"
+            ]
+            if opens_changed and item.opens_at:
+                extra_parts.append(
+                    f"<b>Opens At:</b> {format_due_ist(item.opens_at)} "
+                    f"(was {_format_previous_iso(prev_opens_iso, settings.timezone)})"
+                )
             msg = format_assessment_message(
-                "📅 Deadline Changed",
+                header,
                 item,
                 now,
-                extra_line=f"<b>Previous Due:</b> {old_due_display}",
+                extra_line="\n".join(extra_parts),
             )
             alerts.append(("deadline_changed", msg))
             # Re-evaluate thresholds against the updated deadline
             sent_reminders = [h for h in settings.reminder_hours if remaining_hours <= h]
+        elif opens_changed or unlocked_early:
+            old_opens_dt = _parse_iso_safe(prev_opens_iso, settings.timezone)
+            if opens_changed and item.opens_at:
+                shifted_earlier = old_opens_dt is not None and item.opens_at < old_opens_dt
+                header = (
+                    "⚠️ Schedule Moved EARLIER"
+                    if shifted_earlier
+                    else "📅 Schedule Updated"
+                )
+                extra = (
+                    f"<b>Opens At:</b> {format_due_ist(item.opens_at)}\n"
+                    f"<b>Previous Opens:</b> {_format_previous_iso(prev_opens_iso, settings.timezone)}"
+                )
+            else:
+                header = "🔓 Submissions Now Open"
+                extra = "<i>Submissions opened earlier than previously scheduled.</i>"
+            msg = format_assessment_message(header, item, now, extra_line=extra)
+            alerts.append(("schedule_changed", msg))
         else:
             # Find thresholds crossed since last check that haven't been notified yet
             due_thresholds = [
@@ -119,6 +174,8 @@ def evaluate_assessments(
             "title": item.title,
             "course": item.course,
             "due_at": due_iso,
+            "opens_at": opens_iso,
+            "submissions_not_open_yet": item.submissions_not_open_yet,
             "url": item.url,
             "sent_reminders": sorted(set(sent_reminders), reverse=True),
         }

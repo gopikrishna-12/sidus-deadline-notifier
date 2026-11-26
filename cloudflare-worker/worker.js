@@ -1,21 +1,38 @@
 /**
- * Cloudflare Worker: 24/7 instant Telegram webhook for Sidus Portal commands (/today, /upcoming).
+ * Cloudflare Worker: 24/7 Telegram webhook + 5-minute scheduled deadline monitor.
  *
  * Required Secrets (Workers -> Settings -> Variables and Secrets):
  *   - TELEGRAM_BOT_TOKEN
  *   - TELEGRAM_CHAT_ID
  *   - SESSION_JSON          (raw contents of session.json from login_once.py)
- *   - WEBHOOK_SECRET        (random secret string passed to Telegram setWebhook secret_token)
+ *   - WEBHOOK_SECRET        (random secret string for Telegram webhook & /run-check)
+ *
+ * Required KV Binding (Workers -> Settings -> Bindings -> KV Namespace):
+ *   - SIDUS_STATE           (stores seen assessments, due/open times, and sent reminders)
  *
  * Optional Variables:
- *   - DEADLINE_WINDOW_HOURS (default: "48")
+ *   - DEADLINE_WINDOW_HOURS (default: "48", used for /upcoming filter)
+ *   - REMINDER_HOURS        (default: "24,6,3,2,1")
  *   - PORTAL_ORIGIN         (default: "https://www.sidus.net")
  *   - API_BASE_URL          (default: "https://server.sidus.net")
+ *
+ * Cron Trigger (Workers -> Settings -> Trigger Events -> Cron Triggers):
+ *   - */5 * * * *           (every 5 minutes)
  */
 
 const ASSESSMENTS_ENDPOINT = "/api/v1/student-portal/me/assessments";
 const COMPLETED_STATUSES = new Set(["SUBMITTED", "COMPLETED", "GRADED", "EVALUATED"]);
 const IST_TIMEZONE = "Asia/Kolkata";
+const STATE_KV_KEY = "state";
+const ERROR_ALERT_COOLDOWN_MS = 6 * 3600 * 1000;
+const STATE_RETENTION_MS = 7 * 24 * 3600 * 1000;
+
+const METHOD_LABELS = {
+  QUIZ: "Quiz",
+  FILE_UPLOAD: "File Upload",
+  REFLECTIVE_JOURNAL: "Reflective Journal",
+  SIMPLE_ASSESSMENT: "Assignment",
+};
 
 function escapeHtml(text) {
   return String(text ?? "")
@@ -51,8 +68,14 @@ function formatIstDateTime(date) {
   );
 }
 
+function formatIsoIst(isoString) {
+  if (!isoString) return "Unknown";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return String(isoString);
+  return formatIstDateTime(d);
+}
+
 function getIstDateKey(date) {
-  // Returns YYYY-MM-DD in Asia/Kolkata
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: IST_TIMEZONE,
     year: "numeric",
@@ -61,6 +84,17 @@ function getIstDateKey(date) {
   }).formatToParts(date);
   const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
   return `${map.year}-${map.month}-${map.day}`;
+}
+
+function parseReminderHours(raw) {
+  const text = String(raw || "24,6,3,2,1");
+  const values = new Set();
+  for (const part of text.split(",")) {
+    const n = Number(part.trim());
+    if (Number.isInteger(n) && n > 0) values.add(n);
+  }
+  if (values.size === 0) return [24, 6, 3, 2, 1];
+  return Array.from(values).sort((a, b) => b - a);
 }
 
 function buildAssessmentUrl(portalOrigin, id, method) {
@@ -144,7 +178,6 @@ async function fetchActiveAssessments(env) {
   }
 
   const nowMs = Date.now();
-  const maxMs = windowHours * 3600 * 1000;
   const results = [];
 
   for (const item of payload.data) {
@@ -158,7 +191,11 @@ async function fetchActiveAssessments(env) {
 
     const dueDate = new Date(dueRaw);
     const remainingMs = dueDate.getTime() - nowMs;
-    if (Number.isNaN(remainingMs) || remainingMs <= 0 || remainingMs >= maxMs) continue;
+    if (Number.isNaN(remainingMs) || remainingMs <= 0) continue;
+
+    const opensRaw = item.opensAt || item.quizStartTime || null;
+    const opensDate = opensRaw ? new Date(opensRaw) : null;
+    const validOpens = opensDate && !Number.isNaN(opensDate.getTime()) ? opensDate : null;
 
     const code = String(item.subject?.code || "").trim();
     const name = String(item.subject?.name || "").trim();
@@ -169,7 +206,13 @@ async function fetchActiveAssessments(env) {
       id: String(item.id),
       title: String(item.title || "Untitled").trim(),
       course,
+      method,
       dueDate,
+      dueIso: dueDate.toISOString(),
+      opensDate: validOpens,
+      opensIso: validOpens ? validOpens.toISOString() : null,
+      isExtension: isExt,
+      submissionsNotOpenYet: Boolean(item.submissionsNotOpenYet),
       remainingMs,
       url: buildAssessmentUrl(portalOrigin, String(item.id), method),
     });
@@ -177,6 +220,29 @@ async function fetchActiveAssessments(env) {
 
   results.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
   return { assessments: results, windowHours };
+}
+
+function formatAssessmentMessage(header, item, nowMs, extraHtml = "") {
+  const methodLabel = METHOD_LABELS[item.method] || "Assessment";
+  const remaining = formatRemaining(item.dueDate.getTime() - nowMs);
+  const lines = [
+    `<b>${escapeHtml(header)}</b>`,
+    `<b>Title:</b> ${escapeHtml(item.title)} (${escapeHtml(methodLabel)})`,
+    `<b>Course:</b> ${escapeHtml(item.course)}`,
+    `<b>Due:</b> ${escapeHtml(formatIstDateTime(item.dueDate))}`,
+    `<b>Time Left:</b> ${escapeHtml(remaining)}`,
+  ];
+  if (extraHtml) {
+    lines.push(extraHtml);
+  }
+  if (item.isExtension) {
+    lines.push("<i>Note: Extended deadline applied</i>");
+  }
+  if (item.submissionsNotOpenYet && item.opensDate) {
+    lines.push(`<i>Submissions open: ${escapeHtml(formatIstDateTime(item.opensDate))}</i>`);
+  }
+  lines.push(`<a href="${escapeHtml(item.url)}">Open Assessment</a>`);
+  return lines.join("\n");
 }
 
 function formatAssessmentList(heading, assessments, emptyMessage) {
@@ -210,12 +276,218 @@ async function sendTelegramMessage(env, chatId, htmlText) {
     }
   );
   if (!res.ok) {
-    console.error("Telegram sendMessage failed:", res.status);
+    throw new Error(`TELEGRAM_HTTP_${res.status}`);
   }
 }
 
+function shouldSendErrorAlert(lastIso, nowMs) {
+  if (!lastIso) return true;
+  const lastMs = Date.parse(lastIso);
+  if (Number.isNaN(lastMs)) return true;
+  return nowMs - lastMs >= ERROR_ALERT_COOLDOWN_MS;
+}
+
+function evaluateAssessments(assessments, state, reminderHours, nowMs) {
+  const alerts = [];
+  if (!state.assessments || typeof state.assessments !== "object") {
+    state.assessments = {};
+  }
+  const stored = state.assessments;
+
+  for (const item of assessments) {
+    const remainingHours = (item.dueDate.getTime() - nowMs) / 3600000;
+    if (remainingHours <= 0) continue;
+
+    const existing = stored[item.id];
+    if (!existing || typeof existing !== "object") {
+      alerts.push({
+        kind: "new",
+        html: formatAssessmentMessage("\u{1F195} New Assessment", item, nowMs),
+      });
+      const covered = reminderHours.filter((h) => remainingHours <= h);
+      stored[item.id] = {
+        title: item.title,
+        course: item.course,
+        dueAt: item.dueIso,
+        opensAt: item.opensIso,
+        submissionsNotOpenYet: item.submissionsNotOpenYet,
+        url: item.url,
+        sentReminders: covered,
+      };
+      continue;
+    }
+
+    const prevDueIso = existing.dueAt || null;
+    const hasPrevOpens = Object.prototype.hasOwnProperty.call(existing, "opensAt");
+    const prevOpensIso = existing.opensAt || null;
+    const prevLocked = existing.submissionsNotOpenYet;
+    let sentReminders = Array.isArray(existing.sentReminders) ? [...existing.sentReminders] : [];
+
+    const dueChanged = prevDueIso !== item.dueIso;
+    const opensChanged = hasPrevOpens && prevOpensIso !== item.opensIso;
+    const unlockedEarly = prevLocked === true && !item.submissionsNotOpenYet;
+
+    if (dueChanged) {
+      const oldDueMs = prevDueIso ? Date.parse(prevDueIso) : NaN;
+      const movedEarlier = !Number.isNaN(oldDueMs) && item.dueDate.getTime() < oldDueMs;
+      const header = movedEarlier
+        ? "\u26A0\uFE0F Deadline Moved EARLIER"
+        : "\u{1F4C5} Deadline Extended";
+      const extraLines = [`<b>Previous Due:</b> ${escapeHtml(formatIsoIst(prevDueIso))}`];
+      if (opensChanged && item.opensDate) {
+        extraLines.push(
+          `<b>Opens At:</b> ${escapeHtml(formatIstDateTime(item.opensDate))} (was ${escapeHtml(formatIsoIst(prevOpensIso))})`
+        );
+      }
+      alerts.push({
+        kind: "deadline_changed",
+        html: formatAssessmentMessage(header, item, nowMs, extraLines.join("\n")),
+      });
+      sentReminders = reminderHours.filter((h) => remainingHours <= h);
+    } else if (opensChanged || unlockedEarly) {
+      let header = "\u{1F513} Submissions Now Open";
+      let extra = "<i>Submissions opened earlier than previously scheduled.</i>";
+      if (opensChanged && item.opensDate) {
+        const oldOpensMs = prevOpensIso ? Date.parse(prevOpensIso) : NaN;
+        const shiftedEarlier = !Number.isNaN(oldOpensMs) && item.opensDate.getTime() < oldOpensMs;
+        header = shiftedEarlier
+          ? "\u26A0\uFE0F Schedule Moved EARLIER"
+          : "\u{1F4C5} Schedule Updated";
+        extra =
+          `<b>Opens At:</b> ${escapeHtml(formatIstDateTime(item.opensDate))}\n` +
+          `<b>Previous Opens:</b> ${escapeHtml(formatIsoIst(prevOpensIso))}`;
+      }
+      alerts.push({
+        kind: "schedule_changed",
+        html: formatAssessmentMessage(header, item, nowMs, extra),
+      });
+    } else {
+      const dueThresholds = reminderHours.filter(
+        (h) => remainingHours <= h && !sentReminders.includes(h)
+      );
+      if (dueThresholds.length > 0) {
+        const urgentH = Math.min(...dueThresholds);
+        const label = urgentH === 1 ? "1 hour" : `${urgentH} hours`;
+        alerts.push({
+          kind: `reminder_${urgentH}h`,
+          html: formatAssessmentMessage(
+            `\u23F0 Deadline Reminder (< ${label} left)`,
+            item,
+            nowMs
+          ),
+        });
+        for (const h of dueThresholds) {
+          if (!sentReminders.includes(h)) sentReminders.push(h);
+        }
+      }
+    }
+
+    stored[item.id] = {
+      title: item.title,
+      course: item.course,
+      dueAt: item.dueIso,
+      opensAt: item.opensIso,
+      submissionsNotOpenYet: item.submissionsNotOpenYet,
+      url: item.url,
+      sentReminders: Array.from(new Set(sentReminders)).sort((a, b) => b - a),
+    };
+  }
+
+  // Prune records more than 7 days past due
+  const cutoffMs = nowMs - STATE_RETENTION_MS;
+  for (const [id, entry] of Object.entries(stored)) {
+    const dueMs = entry?.dueAt ? Date.parse(entry.dueAt) : NaN;
+    if (!Number.isNaN(dueMs) && dueMs < cutoffMs) {
+      delete stored[id];
+    }
+  }
+
+  return alerts;
+}
+
+async function runScheduledCheck(env) {
+  if (!env.SIDUS_STATE) {
+    console.error("SIDUS_STATE KV binding is missing; skipping scheduled check.");
+    return { ok: false, reason: "MISSING_KV_BINDING" };
+  }
+
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const rawState = await env.SIDUS_STATE.get(STATE_KV_KEY);
+  const state = rawState
+    ? JSON.parse(rawState)
+    : { assessments: {}, lastSessionAlertAt: null, lastScraperAlertAt: null };
+  const beforeJson = JSON.stringify(state);
+
+  let assessments;
+  try {
+    ({ assessments } = await fetchActiveAssessments(env));
+  } catch (err) {
+    const code = err?.message || "UNKNOWN_ERROR";
+    if (code === "SESSION_EXPIRED") {
+      if (shouldSendErrorAlert(state.lastSessionAlertAt, nowMs)) {
+        await sendTelegramMessage(
+          env,
+          env.TELEGRAM_CHAT_ID,
+          "Session expired, run login_once.py and update SESSION_JSON."
+        );
+        state.lastSessionAlertAt = nowIso;
+      }
+    } else if (shouldSendErrorAlert(state.lastScraperAlertAt, nowMs)) {
+      await sendTelegramMessage(
+        env,
+        env.TELEGRAM_CHAT_ID,
+        escapeHtml(`\u26A0\uFE0F Sidus scraper error (${code}).`)
+      );
+      state.lastScraperAlertAt = nowIso;
+    }
+
+    const afterErrorJson = JSON.stringify(state);
+    if (afterErrorJson !== beforeJson) {
+      await env.SIDUS_STATE.put(STATE_KV_KEY, afterErrorJson);
+    }
+    return { ok: false, reason: code };
+  }
+
+  state.lastSessionAlertAt = null;
+  state.lastScraperAlertAt = null;
+
+  const reminderHours = parseReminderHours(env.REMINDER_HOURS);
+  const alerts = evaluateAssessments(assessments, state, reminderHours, nowMs);
+
+  for (const alert of alerts) {
+    await sendTelegramMessage(env, env.TELEGRAM_CHAT_ID, alert.html);
+  }
+
+  const afterJson = JSON.stringify(state);
+  if (afterJson !== beforeJson) {
+    await env.SIDUS_STATE.put(STATE_KV_KEY, afterJson);
+  }
+
+  return { ok: true, activeCount: assessments.length, alertsSent: alerts.length };
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runScheduledCheck(env));
+  },
+
   async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === "/run-check") {
+      const secretParam = url.searchParams.get("secret");
+      const headerSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+      if (!env.WEBHOOK_SECRET || (secretParam !== env.WEBHOOK_SECRET && headerSecret !== env.WEBHOOK_SECRET)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const result = await runScheduledCheck(env);
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     if (request.method === "GET") {
       return new Response("Sidus Telegram Webhook OK", { status: 200 });
     }
@@ -273,12 +545,14 @@ export default {
           formatAssessmentList("\u{1F4C5} Due Today", dueToday, "No active assessments due today.")
         );
       } else {
+        const maxMs = windowHours * 3600 * 1000;
+        const upcoming = assessments.filter((a) => a.remainingMs < maxMs);
         await sendTelegramMessage(
           env,
           chatId,
           formatAssessmentList(
             `\u{1F4CB} Upcoming Active Assessments (< ${windowHours}h)`,
-            assessments,
+            upcoming,
             "No active assessments due soon."
           )
         );

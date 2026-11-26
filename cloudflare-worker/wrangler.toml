@@ -2,7 +2,16 @@ name = "sidus-telegram-webhook"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
+[triggers]
+crons = ["*/5 * * * *"]
+
 [vars]
 DEADLINE_WINDOW_HOURS = "48"
+REMINDER_HOURS = "24,6,3,2,1"
 PORTAL_ORIGIN = "https://www.sidus.net"
 API_BASE_URL = "https://server.sidus.net"
+
+# Add your KV namespace ID when deploying via Wrangler CLI:
+# [[kv_namespaces]]
+# binding = "SIDUS_STATE"
+# id = "<your_kv_namespace_id>"

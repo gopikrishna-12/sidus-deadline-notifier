@@ -155,25 +155,28 @@ To configure Option B in **GitHub → Settings → Secrets and variables → Act
 
 ---
 
-### Option C (24/7 Instant `/today` & `/upcoming`): Cloudflare Worker Webhook
+### Option C (Recommended 24/7 Cloud): Cloudflare Worker (5-Min Cron + Instant Commands)
 
-GitHub Actions only runs every ~30 minutes. To get **instant (< 1 second) 24/7 replies** to `/today` and `/upcoming` with **$0 and no credit card**:
+GitHub Actions' free `schedule` cron can skip runs for several hours during high load. Upgrading your **Cloudflare Worker** (`cloudflare-worker/worker.js`) runs checks reliably **every 5 minutes** AND replies to `/today` and `/upcoming` in **< 1 second**, 24/7 for **$0** (no credit card):
 
 1. Create a free account at `https://dash.cloudflare.com`.
-2. Go to **Workers & Pages → Create → Create Worker → Deploy** (or deploy `cloudflare-worker/` with Wrangler).
-3. Click **Edit code**, paste the entire contents of `cloudflare-worker/worker.js`, and click **Deploy**.
-4. Open your Worker's **Settings → Variables and Secrets** and add 4 **Secrets**:
+2. Go to **Workers & Pages → Create application → Start with Hello World! → Deploy**.
+3. Click **Edit code**, paste `cloudflare-worker/worker.js`, and click **Deploy**.
+4. Open **Settings → Variables and Secrets** and add 4 **Secrets**:
    - `TELEGRAM_BOT_TOKEN`: your bot token
-   - `TELEGRAM_CHAT_ID`: your chat ID (`7386674154`)
-   - `SESSION_JSON`: full raw contents of `session.json` (remember to update it alongside GitHub Secrets whenever your ~7-day session expires)
-   - `WEBHOOK_SECRET`: any random password/string you invent (letters/numbers/underscores, no spaces)
-5. Register the webhook by opening this URL once in your browser (replace the 3 placeholders):
+   - `TELEGRAM_CHAT_ID`: your chat ID
+   - `SESSION_JSON`: full raw contents of `session.json` (update whenever your ~7-day session expires)
+   - `WEBHOOK_SECRET`: any random secret string (letters/numbers/underscores, no spaces)
+5. **Add KV State Storage**:
+   - Go to **Storage & Databases → KV** → **Create** a namespace (e.g. `sidus-state`).
+   - Return to your Worker → **Settings → Bindings → + Add → KV Namespace** → Variable name: `SIDUS_STATE` → select `sidus-state` → **Save**.
+6. **Add 5-Minute Cron Trigger**:
+   - In your Worker → **Settings → Trigger Events → Cron Triggers → + Add** → enter `*/5 * * * *` → **Add**.
+7. Register the Telegram webhook by opening this URL once in your browser:
    ```
    https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER>.workers.dev&secret_token=<WEBHOOK_SECRET>
    ```
-   You should see `{"ok":true,"result":true,"description":"Webhook was set"}`.
-
-*(GitHub Actions will keep sending your 30-minute new-assessment, deadline-change, and reminder alerts, and `notifier.py` automatically skips `getUpdates` when a webhook is active.)*
+   *(Once Cloudflare Cron + KV is active, you can remove the `schedule:` block from `.github/workflows/check.yml` so you don't get duplicate alerts.)*
 
 ---
 

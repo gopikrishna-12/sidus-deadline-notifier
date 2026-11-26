@@ -202,7 +202,10 @@ def parse_assessments_payload(
             course = course_name or course_code or "Unknown Course"
 
         method = str(item.get("method") or "").upper()
-        opens_at = parse_iso_datetime(item.get("opensAt"), settings.timezone)
+        opens_at = parse_iso_datetime(
+            item.get("opensAt") or item.get("quizStartTime"),
+            settings.timezone,
+        )
 
         results.append(
             Assessment(
